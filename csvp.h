@@ -1,6 +1,5 @@
 /*
-  Author: wwotz (Luke A. Holland)
-  Org:    Seamless 24/7 Ltd
+  Author: wwotz 
 
   Add #CSVP_IMPLEMENTATION to the start of the
   implementation file in order to add the implementation
