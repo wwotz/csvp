@@ -42,31 +42,26 @@ csvp_log_had_error(void);
 #endif /* custom memory procedures not defined,
           or at least not all that is required */
 
+#define CSVP_STRING_DEFAULT_CAPACITY 8
+
 typedef struct csvp_string_t {
         char *data;
         size_t size;
         size_t capacity;
 } csvp_string_t;
 
-CSVPDEF csvp_string_t *
-csvp_string_create(void);
 CSVPDEF int
-csvp_string_write(csvp_string_t *str, const char *data, size_t data_len,
-                  off_t offset);
+csvp_string_init(csvp_string_t *str);
 CSVPDEF int
+csvp_string_write(csvp_string_t *str, const char *data, size_t data_len);
+CSVPDEF void
 csvp_string_clear(csvp_string_t *str);
-CSVPDEF int
-csvp_string_append(csvp_string_t *str, const char *data, size_t data_len);
-CSVPDEF size_t
-csvp_string_get_size(csvp_string_t *str);
+CSVPDEF void
+csvp_string_free(csvp_string_t *str);
 
 typedef enum csvp_type_t {
-        CSVP_CHAR_TYPE,
-        CSVP_SHORT_TYPE,
         CSVP_INTEGER_TYPE,
-        CSVP_LONG_TYPE,
         CSVP_FLOAT_TYPE,
-        CSVP_DOUBLE_TYPE,
         CSVP_STRING_TYPE,
 } csvp_type_t;
 
@@ -80,12 +75,8 @@ typedef double csvp_double_t;
 typedef struct csvp_entry_t {
         csvp_type_t type;
         union {
-                csvp_char_t v_char;
-                csvp_short_t v_short;
                 csvp_int_t v_int;
-                csvp_long_t v_long;
                 csvp_float_t v_float;
-                csvp_double_t v_double;
                 csvp_string_t v_string;
         };
 } csvp_entry_t;
@@ -225,37 +216,81 @@ csvp_log_had_error(void)
 
 #endif /* CSVP_DEBUG */
 
-CSVPDEF csvp_string_t *
-csvp_string_create(void)
+CSVPDEF int
+csvp_string_init(csvp_string_t *str)
 {
-        
+#ifdef CSVP_DEBUG
+        assert(str);
+#endif /* CSVP_DEBUG */
+        str->capacity = CSVP_STRING_DEFAULT_CAPACITY;
+        str->size = 0;
+        str->data = CSVP_MALLOC(str->capacity * sizeof(*str->data));
+        if (!str->data) {
+#ifdef CSVP_DEBUG
+                CSVP_LOG_MESSAGE("Failed to allocate memory for string!");
+#endif /* CSVP_DEBUG */
+                return -1;
+        }
+        return 0;
 }
 
 CSVPDEF int
-csvp_string_write(csvp_string_t *str, const char *data, size_t data_len,
-                  off_t offset)
+csvp_string_write(csvp_string_t *str, const char *data, size_t data_len)
 {
+#ifdef CSVP_DEBUG
+        assert(str);
+        assert(str->capacity > 0);
+#endif /* CSVP_DEBUG */
+        if (!data || data_len <= 0)
+                return 0;
+        while (str->capacity <= data_len) {
+                char *new_data = CSVP_REALLOC(str->data, str->capacity*2);
+                if (!new_data) {
+#ifdef CSVP_DEBUG
+                        CSVP_LOG_MESSAGE("Failed to allocate space for string!");
+#endif /* CSVP_DEBUG */
+                        return -1;
+                }
+                str->data = new_data;
+                str->capacity *= 2;
+        }
 
+        str->data = memcpy(str->data, data, data_len);
+        return data_len;
 }
 
-CSVPDEF int
+CSVPDEF void
 csvp_string_clear(csvp_string_t *str)
 {
-
+#ifdef CSVP_DEBUG
+        assert(str);
+        assert(str->capacity > 0);
+#endif /* CSVP_DEBUG */
+        memset(str->data, 0, str->capacity);
+        str->size = 0;
 }
 
-CSVPDEF int
-csvp_string_append(csvp_string_t *str, const char *data, size_t data_len)
+CSVPDEF void
+csvp_string_free(csvp_string_t *str)
 {
-
+#ifdef CSVP_DEBUG
+        assert(str);
+        assert(str->capacity > 0);
+#endif /* CSVP_DEBUG */
+        csvp_string_clear(str);
+        str->capacity = 0;
+        CSVP_FREE(str->data);
 }
 
-CSVPDEF size_t
-csvp_string_get_size(csvp_string_t *str)
+static int
+csvp_skip_whitespace(const char *buffer, size_t buffer_len)
 {
-
+        size_t i, c;
+        for (i = 0; i < buffer_len && (c = buffer[i]) != '\0'
+                     && c == ' '; i++)
+                ;
+        return i;
 }
-
 
 static int
 csvp_check_match(const char *desc, const char *rest, size_t rest_size)
@@ -268,9 +303,99 @@ csvp_check_match(const char *desc, const char *rest, size_t rest_size)
 }
 
 static int
-csvp_check_char(const char *desc)
+csvp_check_integer(const char *buffer, size_t buffer_len)
 {
-        
+        size_t i, c;
+        i = csvp_skip_whitespace(buffer, buffer_len);
+        c = buffer[i];
+        if (c == ',' || c == '\0') {
+                return 1;
+        } else if (c >= '0' && c <= '9' || c == '-') {
+                if (c == '-')
+                        i++;
+                while ((c = buffer[i]) >= '0' && c <= '9')
+                        i++;
+                i += csvp_skip_whitespace(buffer+i, buffer_len-i);
+                if ((c = buffer[i]) == '\0' || c == ',')
+                        return 1;
+        }
+        return 0;
+}
+
+static int
+csvp_check_float(const char *buffer, size_t buffer_len)
+{
+        size_t i, c;
+        i = csvp_skip_whitespace(buffer, buffer_len);
+        c = buffer[i];
+        if (c == ',' || c == '\0') {
+                return 1;
+        } else if ((c >= '0' && c <= '9') || c == '.'
+                   || c == '-') {
+                if (c == '.' || c == '-')
+                        i++;
+                while ((c = buffer[i]) >= '0' && c <= '9'
+                       && i < buffer_len)
+                        i++;
+                if (c == '.') {
+                        i++;
+                        while ((c = buffer[i]) >= '0' && c <= '9'
+                               && i < buffer_len)
+                                i++;
+                        if (c == ',' || c == '\0')
+                                return 1;
+                } else if (c == ',' || c == '\0') {
+                        return 1;
+                }
+        }
+        return 0;
+}
+
+
+static int
+csvp_write_integer(csvp_entry_t *entry, const char *buffer, size_t buffer_len)
+{
+        size_t i, c;
+        int n;
+#ifdef CSVP_DEBUG
+        assert(entry);
+        assert(entry->type == CSVP_INTEGER_TYPE);
+#endif /* CSVP_DEBUG */
+        n = atoi(buffer);
+        entry->v_int = n;
+        for (i = 0; i < buffer_len && (c = buffer[i]) != '\0' && c != ','; i++)
+                ;
+        return (int) i;
+}
+
+static int
+csvp_write_float(csvp_entry_t *entry, const char *buffer, size_t buffer_len)
+{
+        size_t i, c;
+        float n;
+#ifdef CSVP_DEBUG
+        assert(entry);
+        assert(entry->type == CSVP_FLOAT_TYPE);
+#endif /* CSVP_DEBUG */
+        n = (float) atof(buffer);
+        entry->v_float = n;
+        for (i = 0; i < buffer_len && (c = buffer[i]) != '\0' && c != ','; i++)
+                ;
+        return (int) i;
+}
+
+static int
+csvp_write_string(csvp_entry_t *entry, const char *buffer, size_t buffer_len)
+{
+        size_t i, c;
+#ifdef CSVP_DEBUG
+        assert(entry);
+        assert(entry->type == CSVP_STRING_TYPE);
+#endif /* CSVP_DEBUG */
+        for (i = 0; i < buffer_len && (c = buffer[i]) != '\0' && c != ','; i++)
+                ;
+        csvp_string_write(&entry->v_string, buffer, i);
+        return i;
 }
 
 /* used to hold an entry in the record being processed*/
@@ -292,39 +417,18 @@ csvp_create_format(const char *desc)
         record->size = 0;
         for (size_t i = 0, c; (c = desc[i]) != '\0'
                      && record->size < MAX_ENTRIES; i++) {
-                while ((c = desc[i]) != ',')
-                        i++;
                 while ((c = desc[i]) == ',' || c == ' ')
                         i++;
                 if (c == '\0')
                         break;
                 
                 switch (c) {
-                case 'c':
-                        if (csvp_check_match(desc+i+1, "har", 3)) {
-                                types[record->size++] = CSVP_CHAR_TYPE;
-                        } else {
-                                goto mismatch;
-                        }
-                        break;
                 case 's':
-                        if (csvp_check_match(desc+i+1, "hort", 4)) {
-                                types[record->size++] = CSVP_SHORT_TYPE;
-                        } else {
-                                /* also handles the string type */
-                                goto mismatch;
-                        }
-                        break;
+                        /* handles strings */
+                        goto mismatch;
                 case 'i':
                         if (csvp_check_match(desc+i+1, "nteger", 6)) {
                                 types[record->size++] = CSVP_INTEGER_TYPE;
-                        } else {
-                                goto mismatch;
-                        }
-                        break;
-                case 'l':
-                        if (csvp_check_match(desc+i+1, "ong", 3)) {
-                                types[record->size++] = CSVP_LONG_TYPE;
                         } else {
                                 goto mismatch;
                         }
@@ -336,25 +440,23 @@ csvp_create_format(const char *desc)
                                 goto mismatch;
                         }
                         break;
-                case 'd':
-                        if (csvp_check_match(desc+i+1, "ouble", 5)) {
-                                types[record->size++] = CSVP_DOUBLE_TYPE;
-                        } else {
-                                goto mismatch;
-                        }
-                        break;
                 default:
                 mismatch:
                         types[record->size++] = CSVP_STRING_TYPE;
                         break;
                 }
+                
+                while ((c = desc[i]) != ',' && c != '\0')
+                        i++;
+                if (c == '\0')
+                        break;
         }
 
         if (record->size <= 0) {
                 CSVP_FREE(record);
                 return NULL;
         }
-        
+
         record->entries = CSVP_MALLOC(record->size * sizeof(*record->entries));
         if (!record->entries) {
 #ifdef CSVP_DEBUG
@@ -364,8 +466,11 @@ csvp_create_format(const char *desc)
                 return NULL;
         }
 
-        for (int i = 0; i < record->size; i++) 
+        for (int i = 0; i < record->size; i++) {
                 record->entries[i].type = types[i];
+                if (types[i] == CSVP_STRING_TYPE)
+                        csvp_string_init(&record->entries[i].v_string);
+        }
         return record;
 }
 
@@ -388,6 +493,7 @@ csvp_getline(char *buffer, size_t buffer_size, FILE *fd)
 CSVPDEF int
 csvp_next_record(FILE *fd, csvp_record_t *record)
 {
+        size_t i, c, idx;
         ssize_t buffer_size;
         char buffer[RECORD_BUFSIZE];
 #ifdef CSVP_DEBUG
@@ -395,42 +501,16 @@ csvp_next_record(FILE *fd, csvp_record_t *record)
         assert(record);
 #endif /* CSVP_DEBUG */
         buffer_size = csvp_getline(buffer, RECORD_BUFSIZE, fd);
-        for (size_t i = 0, c, idx = 0; (c = buffer[i]) != '\0'
+        for (i = 0, c, idx = 0; (c = buffer[i]) != '\0'
                      && c != '\n' && idx < record->size; i++) {
-                while ((c = buffer[i]) != ',')
-                        i++;
-                while ((c = buffer[i]) == ',' || c == ' ')
+                while ((c = buffer[i]) == ' ')
                         i++;
                 if (c == '\0' || c == '\n')
                         break;
                 switch (record->entries[idx].type) {
-                case CSVP_CHAR_TYPE:
-                        if (csvp_check_char(buffer+i, buffer_size-i)) {
-                                csvp_write_char(record->entries+idx, buffer+i, buffer_size-i);
-                                idx++;
-                        } else {
-                                idx = 0;
-                        }
-                        break;
-                case CSVP_SHORT_TYPE:
-                        if (csvp_check_short(buffer+i, buffer_size-i)) {
-                                csvp_write_short(record->entries+idx, buffer+i, buffer_size-i);
-                                idx++;
-                        } else {
-                                idx = 0;
-                        }
-                        break;
                 case CSVP_INTEGER_TYPE:
                         if (csvp_check_integer(buffer+i, buffer_size-i)) {
                                 csvp_write_integer(record->entries+idx, buffer+i, buffer_size-i);
-                                idx++;
-                        } else {
-                                idx = 0;
-                        }
-                        break;
-                case CSVP_LONG_TYPE:
-                        if (csvp_check_long(buffer+i, buffer_size-i)) {
-                                csvp_write_long(record->entries+idx, buffer+i, buffer_size-i);
                                 idx++;
                         } else {
                                 idx = 0;
@@ -444,21 +524,19 @@ csvp_next_record(FILE *fd, csvp_record_t *record)
                                 idx = 0;
                         }
                         break;
-                case CSVP_DOUBLE_TYPE:
-                        if (csvp_check_double(buffer+i, buffer_size-i)) {
-                                csvp_write_double(record->entries+idx, buffer+i, buffer_size-i);
-                                idx++;
-                        } else {
-                                idx = 0;
-                        }
-                        break;
                 case CSVP_STRING_TYPE:
                         csvp_write_string(record->entries+idx, buffer+i, buffer_size-i);
                         idx++;
                         break;
                 }
+
+                while ((c = buffer[i]) != ',' && c != '\0')
+                        i++;
+                if (c == '\0')
+                        break;
         }
-        return 0;
+
+        return buffer_size;
 }
 
 CSVPDEF int
@@ -479,6 +557,11 @@ csvp_record_free(csvp_record_t *record)
         assert(record->entries);
         assert(record->size > 0);
 #endif /* CSVP_DEBUG */
+        for (int i = 0; i < record->size; i++) {
+                csvp_entry_t *entry = record->entries+i;
+                if (entry->type == CSVP_STRING_TYPE)
+                        csvp_string_free(&entry->v_string);
+        }
         CSVP_FREE(record->entries);
         CSVP_FREE(record);
 }
