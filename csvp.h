@@ -69,7 +69,9 @@ typedef char csvp_char_t;
 typedef short csvp_short_t;
 typedef int csvp_int_t;
 typedef long csvp_long_t;
-typedef float csvp_float_t;
+
+// for now
+typedef double csvp_float_t;
 typedef double csvp_double_t;
 
 typedef struct csvp_entry_t {
@@ -88,7 +90,7 @@ typedef struct csvp_record_t {
 
 /* Obtains a format based on a description of the record format,
    this can then be filled by subsequent calls to:
-   'csvp_next_record' and 'csvp_prev_record', returns a CVSP_MALLOC'd
+   'csvp_next_record' and 'csvp_prev_record', returns a CSVP_MALLOC'd
    structure on success, NULL if the format can not be processed.
    */
 CSVPDEF csvp_record_t *
@@ -256,6 +258,7 @@ csvp_string_write(csvp_string_t *str, const char *data, size_t data_len)
         }
 
         str->data = memcpy(str->data, data, data_len);
+        str->data[data_len] = '\0';
         return data_len;
 }
 
@@ -372,12 +375,12 @@ static int
 csvp_write_float(csvp_entry_t *entry, const char *buffer, size_t buffer_len)
 {
         size_t i, c;
-        float n;
+        double n;
 #ifdef CSVP_DEBUG
         assert(entry);
         assert(entry->type == CSVP_FLOAT_TYPE);
 #endif /* CSVP_DEBUG */
-        n = (float) atof(buffer);
+        n = atof(buffer);
         entry->v_float = n;
         for (i = 0; i < buffer_len && (c = buffer[i]) != '\0' && c != ','; i++)
                 ;
